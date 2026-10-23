@@ -58,9 +58,25 @@ pub struct RelayInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limitation: Option<Limitation>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub payment_url: Option<String>,
+    pub payments_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fees: Option<Fees>,
+}
+
+/// Build an HTTP(S) URL for a page served by the relay itself, from the
+/// advertised websocket URL. Only the scheme is changed (`ws` to `http`,
+/// `wss` to `https`); `path` is resolved relative to the relay URL.
+fn relay_http_url(relay_url: &str, path: &str) -> Option<String> {
+    let mut url = url::Url::parse(relay_url).ok()?;
+    let scheme = match url.scheme() {
+        "ws" => "http",
+        "wss" => "https",
+        "http" | "https" => url.scheme(),
+        _ => return None,
+    }
+    .to_owned();
+    url.set_scheme(&scheme).ok()?;
+    url.join(path).ok().map(String::from)
 }
 
 /// Convert an Info configuration into public Relay Info
@@ -86,7 +102,7 @@ impl From<Settings> for RelayInfo {
             ),
         };
 
-        let (payment_url, fees) = if p.enabled {
+        let (payments_url, fees) = if p.enabled {
             let admission_fee = if p.admission_cost > 0 {
                 Some(vec![Fee {
                     amount: p.admission_cost * 1000,
@@ -110,15 +126,11 @@ impl From<Settings> for RelayInfo {
                 publication: post_fee,
             };
 
-            let payment_url = if p.enabled && i.relay_url.is_some() {
-                Some(format!(
-                    "{}join",
-                    i.relay_url.clone().unwrap().replace("ws", "http")
-                ))
-            } else {
-                None
-            };
-            (payment_url, Some(fees))
+            let payments_url = i
+                .relay_url
+                .as_deref()
+                .and_then(|url| relay_http_url(url, "join"));
+            (payments_url, Some(fees))
         } else {
             (None, None)
         };
@@ -133,9 +145,68 @@ impl From<Settings> for RelayInfo {
             software: Some("https://git.sr.ht/~gheartsfield/nostr-rs-relay".to_owned()),
             version: CARGO_PKG_VERSION.map(std::borrow::ToOwned::to_owned),
             limitation: Some(limitations),
-            payment_url,
+            payments_url,
             fees,
             icon: i.relay_icon,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paid_settings() -> Settings {
+        let mut settings = Settings::default();
+        settings.info.relay_url = Some("wss://relay.example.com/".to_owned());
+        settings.pay_to_relay.enabled = true;
+        settings.pay_to_relay.admission_cost = 4200;
+        settings.pay_to_relay.cost_per_event = 1;
+        settings
+    }
+
+    #[test]
+    fn payments_url_uses_nip11_field_name() {
+        let info = RelayInfo::from(paid_settings());
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["payments_url"], "https://relay.example.com/join");
+        assert!(json.get("payment_url").is_none());
+    }
+
+    #[test]
+    fn payments_url_only_rewrites_scheme() {
+        assert_eq!(
+            relay_http_url("wss://ws.example.com/", "join").as_deref(),
+            Some("https://ws.example.com/join")
+        );
+        assert_eq!(
+            relay_http_url("ws://news.example.com", "join").as_deref(),
+            Some("http://news.example.com/join")
+        );
+        assert_eq!(
+            relay_http_url("wss://example.com/relay/", "join").as_deref(),
+            Some("https://example.com/relay/join")
+        );
+        assert_eq!(relay_http_url("not a url", "join"), None);
+    }
+
+    #[test]
+    fn fees_from_pay_to_relay_in_msats() {
+        let info = RelayInfo::from(paid_settings());
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["fees"]["admission"][0]["amount"], 4_200_000);
+        assert_eq!(json["fees"]["admission"][0]["unit"], "msats");
+        assert_eq!(json["fees"]["publication"][0]["amount"], 1000);
+        assert_eq!(json["limitation"]["payment_required"], true);
+    }
+
+    #[test]
+    fn no_payment_fields_when_pay_to_relay_disabled() {
+        let mut settings = paid_settings();
+        settings.pay_to_relay.enabled = false;
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert!(json.get("payments_url").is_none());
+        assert!(json.get("fees").is_none());
+        assert_eq!(json["limitation"]["payment_required"], false);
     }
 }
