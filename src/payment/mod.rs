@@ -38,6 +38,14 @@ pub trait PaymentProcessor: Send + Sync {
     async fn get_invoice(&self, keys: &Keys, amount: u64) -> Result<InvoiceInfo, Error>;
     /// Check payment status of an invoice
     async fn check_invoice(&self, payment_hash: &str) -> Result<InvoiceStatus, Error>;
+    /// Check payment status of a stored invoice record.
+    ///
+    /// Processors whose payment requests carry more than a payment hash
+    /// (e.g. an address, or an expected amount) can override this. The
+    /// default checks by payment hash.
+    async fn check_invoice_info(&self, invoice: &InvoiceInfo) -> Result<InvoiceStatus, Error> {
+        self.check_invoice(&invoice.payment_hash).await
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -157,7 +165,7 @@ impl Payment {
                         let keys = Keys::from_pk_str(&pubkey)?;
 
                         if let Ok(Some(invoice_info)) = self.repo.get_unpaid_invoice(&keys).await {
-                            match self.check_invoice_status(&invoice_info.payment_hash).await? {
+                            match self.check_invoice_info_status(&invoice_info).await? {
                                 InvoiceStatus::Paid => {
                                     self.repo.admit_account(&keys, self.settings.pay_to_relay.admission_cost).await?;
                                     self.payment_tx.send(PaymentMessage::AccountAdmitted(pubkey)).ok();
@@ -265,6 +273,19 @@ impl Payment {
         }
 
         Ok(invoice_info)
+    }
+
+    /// Check paid status of a stored invoice record with the payment processor
+    pub async fn check_invoice_info_status(
+        &self,
+        invoice_info: &InvoiceInfo,
+    ) -> Result<InvoiceStatus, Error> {
+        let status = self.processor.check_invoice_info(invoice_info).await?;
+        self.repo
+            .update_invoice(&invoice_info.payment_hash, status.clone())
+            .await?;
+
+        Ok(status)
     }
 
     /// Check paid status of invoice with LNbits
