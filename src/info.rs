@@ -2,6 +2,7 @@
 /// Relay Info
 use crate::config::Settings;
 use crate::conn::{MAX_SUBSCRIPTIONS, MAX_SUBSCRIPTION_ID_LEN};
+use nostr::key::{FromSkStr, Keys};
 use serde::{Deserialize, Serialize};
 
 pub const CARGO_PKG_VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
@@ -59,7 +60,12 @@ pub struct RelayInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pubkey: Option<String>,
+    /// The relay's own pubkey (NIP-11 `self`)
+    #[serde(rename = "self", skip_serializing_if = "Option::is_none")]
+    pub self_pubkey: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +76,8 @@ pub struct RelayInfo {
     pub software: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms_of_service: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limitation: Option<Limitation>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,15 +166,40 @@ impl From<Settings> for RelayInfo {
             (None, None)
         };
 
+        // The pay-to-relay key signs the relay's own DMs, so it is the
+        // relay's identity.
+        let self_pubkey = if p.enabled {
+            p.secret_key
+                .as_deref()
+                .and_then(|sk| Keys::from_sk_str(sk).ok())
+                .map(|keys| keys.public_key().to_string())
+        } else {
+            None
+        };
+
+        // Pay-to-relay serves its terms at /terms.
+        let terms_of_service = i.terms_of_service.or_else(|| {
+            if p.enabled && !p.terms_message.is_empty() {
+                i.relay_url
+                    .as_deref()
+                    .and_then(|url| relay_http_url(url, "terms"))
+            } else {
+                None
+            }
+        });
+
         RelayInfo {
             id: i.relay_url,
             name: i.name,
             description: i.description,
+            banner: i.banner,
             pubkey: i.pubkey,
+            self_pubkey,
             contact: i.contact,
             supported_nips: Some(supported_nips),
             software: Some("https://git.sr.ht/~gheartsfield/nostr-rs-relay".to_owned()),
             version: CARGO_PKG_VERSION.map(std::borrow::ToOwned::to_owned),
+            terms_of_service,
             limitation: Some(limitations),
             payments_url,
             fees,
@@ -219,6 +252,41 @@ mod tests {
         settings.limits.event_kind_allowlist = Some(vec![1, 7]);
         let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
         assert_eq!(json["limitation"]["restricted_writes"], true);
+    }
+
+    #[test]
+    fn banner_and_terms_from_info_config() {
+        let mut settings = Settings::default();
+        settings.info.banner = Some("https://example.test/banner.png".to_owned());
+        settings.info.terms_of_service = Some("https://example.test/tos".to_owned());
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert_eq!(json["banner"], "https://example.test/banner.png");
+        assert_eq!(json["terms_of_service"], "https://example.test/tos");
+    }
+
+    #[test]
+    fn terms_of_service_defaults_to_pay_to_relay_terms() {
+        let mut settings = paid_settings();
+        settings.pay_to_relay.terms_message = "Be nice.".to_owned();
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert_eq!(json["terms_of_service"], "https://relay.example.com/terms");
+    }
+
+    #[test]
+    fn self_pubkey_from_pay_to_relay_secret_key() {
+        let mut settings = paid_settings();
+        // secret key 1 (the generator point)
+        settings.pay_to_relay.secret_key = Some(format!("{:0>64}", "1"));
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert_eq!(
+            json["self"],
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        );
+
+        let mut settings = paid_settings();
+        settings.pay_to_relay.secret_key = Some("<nostr nsec>".to_owned());
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert!(json.get("self").is_none());
     }
 
     #[test]
