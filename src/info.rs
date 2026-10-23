@@ -1,21 +1,36 @@
 //! Relay metadata using NIP-11
 /// Relay Info
 use crate::config::Settings;
+use crate::conn::{MAX_SUBSCRIPTIONS, MAX_SUBSCRIPTION_ID_LEN};
 use serde::{Deserialize, Serialize};
 
 pub const CARGO_PKG_VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 pub const UNIT: &str = "msats";
 
-/// Limitations of the relay as specified in NIP-111
-/// (This nip isn't finalized so may change)
+/// Limitations of the relay, as specified in NIP-11 (`limitation`)
 #[derive(Debug, Serialize, Deserialize)]
 #[allow(unused)]
 pub struct Limitation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_message_length: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_subscriptions: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_subid_length: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_required: Option<bool>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     payment_required: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     restricted_writes: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created_at_upper_limit: Option<usize>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -93,13 +108,21 @@ impl From<Settings> for RelayInfo {
         let p = c.pay_to_relay;
 
         let limitations = Limitation {
+            max_message_length: c.limits.max_ws_message_bytes,
+            max_subscriptions: Some(MAX_SUBSCRIPTIONS),
+            max_subid_length: Some(MAX_SUBSCRIPTION_ID_LEN),
+            // NIP-42 AUTH is never required before a connection can act;
+            // it only gates specific actions (e.g. reading DMs).
+            auth_required: Some(false),
             payment_required: Some(p.enabled),
             restricted_writes: Some(
                 p.enabled
                     || c.verified_users.is_enabled()
                     || c.authorization.pubkey_whitelist.is_some()
+                    || c.limits.event_kind_allowlist.is_some()
                     || c.grpc.restricts_write,
             ),
+            created_at_upper_limit: c.options.reject_future_seconds,
         };
 
         let (payments_url, fees) = if p.enabled {
@@ -163,6 +186,39 @@ mod tests {
         settings.pay_to_relay.admission_cost = 4200;
         settings.pay_to_relay.cost_per_event = 1;
         settings
+    }
+
+    #[test]
+    fn limitation_from_config() {
+        let mut settings = Settings::default();
+        settings.limits.max_ws_message_bytes = Some(65536);
+        settings.options.reject_future_seconds = Some(1800);
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        let l = &json["limitation"];
+        assert_eq!(l["max_message_length"], 65536);
+        assert_eq!(l["max_subscriptions"], 32);
+        assert_eq!(l["max_subid_length"], 256);
+        assert_eq!(l["auth_required"], false);
+        assert_eq!(l["payment_required"], false);
+        assert_eq!(l["restricted_writes"], false);
+        assert_eq!(l["created_at_upper_limit"], 1800);
+    }
+
+    #[test]
+    fn limitation_omits_unset_limits() {
+        let mut settings = Settings::default();
+        settings.limits.max_ws_message_bytes = None;
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert!(json["limitation"].get("max_message_length").is_none());
+        assert!(json["limitation"].get("created_at_upper_limit").is_none());
+    }
+
+    #[test]
+    fn kind_allowlist_restricts_writes() {
+        let mut settings = Settings::default();
+        settings.limits.event_kind_allowlist = Some(vec![1, 7]);
+        let json = serde_json::to_value(RelayInfo::from(settings)).unwrap();
+        assert_eq!(json["limitation"]["restricted_writes"], true);
     }
 
     #[test]
