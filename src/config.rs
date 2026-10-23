@@ -1,4 +1,5 @@
 //! Configuration file and settings management
+use crate::payment::bark::BarkRails;
 use crate::payment::Processor;
 use config::{Config, ConfigError, File};
 use serde::{Deserialize, Serialize};
@@ -102,6 +103,7 @@ pub struct PayToRelay {
     pub secret_key: Option<String>,
     pub processor: Processor,
     pub rune_path: Option<String>, // To access clightning API
+    pub bark_rails: BarkRails,     // Payment rails offered by the Bark processor
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,7 +259,9 @@ impl Settings {
                     .rune_path
                     .as_ref()
                     .is_some_and(|path| path != "<rune path>"));
-            } else if settings.pay_to_relay.processor == Processor::LNBits {
+            } else if settings.pay_to_relay.processor == Processor::LNBits
+                || settings.pay_to_relay.processor == Processor::Bark
+            {
                 assert_ne!(settings.pay_to_relay.api_secret, "");
             }
             // Should check that url is valid
@@ -343,6 +347,7 @@ impl Default for Settings {
                 direct_message: false,
                 secret_key: None,
                 processor: Processor::LNBits,
+                bark_rails: BarkRails::Both,
             },
             verified_users: VerifiedUsers {
                 mode: VerifiedUsersMode::Disabled,

@@ -1,5 +1,6 @@
 use crate::error::{Error, Result};
 use crate::event::Event;
+use crate::payment::bark::BarkPaymentProcessor;
 use crate::payment::cln_rest::ClnRestPaymentProcessor;
 use crate::payment::lnbits::LNBitsPaymentProcessor;
 use crate::repo::NostrRepo;
@@ -11,6 +12,7 @@ use async_trait::async_trait;
 use nostr::key::{FromPkStr, FromSkStr};
 use nostr::{key::Keys, Event as NostrEvent, EventBuilder};
 
+pub mod bark;
 pub mod cln_rest;
 pub mod lnbits;
 
@@ -52,6 +54,7 @@ pub trait PaymentProcessor: Send + Sync {
 pub enum Processor {
     LNBits,
     ClnRest,
+    Bark,
 }
 
 /// Possible states of an invoice
@@ -123,6 +126,7 @@ impl Payment {
         let processor: Arc<dyn PaymentProcessor> = match &settings.pay_to_relay.processor {
             Processor::LNBits => Arc::new(LNBitsPaymentProcessor::new(&settings)),
             Processor::ClnRest => Arc::new(ClnRestPaymentProcessor::new(&settings)?),
+            Processor::Bark => Arc::new(BarkPaymentProcessor::new(&settings)?),
         };
 
         Ok(Payment {
