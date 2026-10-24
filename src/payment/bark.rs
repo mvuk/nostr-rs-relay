@@ -10,7 +10,10 @@
 //!   off-chain (arkoor) Ark payment. Paid when barkd's history shows
 //!   successful receives on that address adding up to the amount.
 //! * `both` (default): a BIP-321 `bitcoin:` URI carrying both the Ark
-//!   address and the Lightning invoice. Either rail settles it.
+//!   address and the Lightning invoice. Either rail settles it. A client
+//!   can pass the URI unchanged to its wallet with the NWC-321 `pay`
+//!   method: the wallet pays `ark=` when the address is on its own Ark
+//!   server (the address encodes the server), otherwise `lightning=`.
 use std::str::FromStr;
 
 use async_trait::async_trait;

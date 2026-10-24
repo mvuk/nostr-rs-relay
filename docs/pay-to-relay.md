@@ -54,7 +54,12 @@ bark_rails = "both"
   `bitcoin:?ark=<address>&amount=<btc>`. Paid once barkd's history shows
   successful Ark receives on that address adding up to the amount.
 * `both`: a BIP-321 URI with the Ark address and the Lightning invoice
-  (`bitcoin:?ark=...&lightning=...`). Either payment settles it.
+  (`bitcoin:?ark=...&lightning=...&amount=...`). Either payment settles it.
+  Any BIP-321 wallet can pay it, and a client can hand it unchanged to its
+  wallet with the [NWC-321](https://github.com/nostr-wallet-connect/nwc/blob/main/321.md)
+  `pay` method: an Ark wallet on the relay's Ark server pays the address
+  (the address encodes its Ark server, so the wallet decides), any other
+  wallet pays the invoice.
 
 Payment is checked when the author visits `/account` (like ClnRest; there is
 no webhook). The barkd daemon must be running to claim incoming payments.
